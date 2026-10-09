@@ -11,7 +11,7 @@ zabbix_export:
         Контроллер домена, единственный КД + DNS на всю организацию.
         Шаблон дополняет связанные «Windows by Zabbix agent active» (CPU/RAM уже там) и «AD DS Monitoring and Attack Detection».
         1) Службы AD-стека: NTDS, DNS, Netlogon, KDC, W32Time — падение любой = филиалы/станции начнут слать «trust broken» и «нет DNS».
-        2) Проверка портов с сервера Zabbix (simple checks, не зависят от агента): LDAP 389, LDAPS 636, SMB 445, DNS 53 UDP+TCP — имитирует доступность КД для филиалов через фаервол.
+        2) Проверка портов с сервера Zabbix (simple checks, не зависят от агента): LDAP 389, LDAPS 636, SMB 445, DNS 53 TCP — имитирует доступность КД для филиалов через фаервол. UDP-проверки нет: simple checks умеют только NTP, DNS-over-UDP не проверить.
         3) Журналы: Directory Service 2042 (USN rollback — признак снапшота/восстановления, КД в опасности), Netlogon 5719/5722, DNS 5774.
         4) Диск C: (NTDS.dit растет от мусора — при переполнении КД встает), дрейф времени (fuzzytime), аптайм.
         КД НЕ включается в принудительную недельную перезагрузку станций: аптайм > 45 дней — только INFO-напоминание.
@@ -26,6 +26,8 @@ zabbix_export:
           delay: 1m
           history: 7d
           description: 'Состояние службы NTDS — ядро Active Directory. 0 = работает, любое другое значение = проблема. При падении NTDS КД не обслуживает AD, станции начнут терять trust.'
+          valuemap:
+            name: 'Windows service state'
           tags:
             - tag: component
               value: ad
@@ -42,6 +44,8 @@ zabbix_export:
           delay: 1m
           history: 7d
           description: 'Состояние службы DNS Server. 0 = работает. КД — единственный DNS для всей организации, включая филиалы.'
+          valuemap:
+            name: 'Windows service state'
           tags:
             - tag: component
               value: dns
@@ -58,6 +62,8 @@ zabbix_export:
           delay: 1m
           history: 7d
           description: 'Состояние службы Netlogon. 0 = работает. Netlogon обслуживает secure channel и регистрацию SRV-записей в DNS.'
+          valuemap:
+            name: 'Windows service state'
           tags:
             - tag: component
               value: ad
@@ -74,6 +80,8 @@ zabbix_export:
           delay: 1m
           history: 7d
           description: 'Состояние службы KDC (Kerberos Key Distribution Center). 0 = работает. Без KDC не выдаются тикеты — логон невозможен.'
+          valuemap:
+            name: 'Windows service state'
           tags:
             - tag: component
               value: ad
@@ -90,6 +98,8 @@ zabbix_export:
           delay: 1m
           history: 7d
           description: 'Состояние службы времени W32Time. 0 = работает. Дрейф времени на КД ломает Kerberos (погрешность ±5 мин) и логи.'
+          valuemap:
+            name: 'Windows service state'
           tags:
             - tag: component
               value: time
@@ -106,6 +116,8 @@ zabbix_export:
           delay: 1m
           history: 7d
           description: 'Проверка TCP-порта LDAP (389) с сервера Zabbix. Не зависит от агента — показывает доступность КД так, как её видит сеть/фаервол.'
+          valuemap:
+            name: 'Service availability'
           tags:
             - tag: component
               value: network
@@ -122,6 +134,8 @@ zabbix_export:
           delay: 1m
           history: 7d
           description: 'Проверка TCP-порта LDAPS (636) с сервера Zabbix. Используется защищенными привязками и некоторыми приложениями.'
+          valuemap:
+            name: 'Service availability'
           tags:
             - tag: component
               value: network
@@ -138,6 +152,8 @@ zabbix_export:
           delay: 1m
           history: 7d
           description: 'Проверка TCP-порта SMB (445) — файловые шары КД, в т.ч. SYSVOL и NETLOGON (групповые политики).'
+          valuemap:
+            name: 'Service availability'
           tags:
             - tag: component
               value: network
@@ -147,22 +163,6 @@ zabbix_export:
               name: 'КД: SMB (445) не отвечает 3 минуты — SYSVOL/GPO недоступны'
               priority: HIGH
               description: 'SMB 445 недоступен 3 минуты: станции не получат SYSVOL и NETLOGON — групповые политики перестанут применяться, логон-скрипты не выполнятся.'
-        - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f70b
-          name: 'Port check: DNS UDP (53) from Zabbix server'
-          type: SIMPLE
-          key: 'net.udp.service[udp,,53]'
-          delay: 1m
-          history: 7d
-          description: 'Проверка UDP-порта DNS (53) с сервера Zabbix. Основной транспорт DNS-запросов для всех клиентов, включая филиалы.'
-          tags:
-            - tag: component
-              value: dns
-          triggers:
-            - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f738
-              expression: 'max(/Template Windows Domain Controller/net.udp.service[udp,,53],3m)=0'
-              name: 'КД: DNS (53/udp) не отвечает 3 минуты'
-              priority: DISASTER
-              description: 'DNS по UDP недоступен 3 минуты: вся организация без разрешения имен. Филиалы с внешними DNS (77.88.8.8) не пострадают, локальные — полностью.'
         - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f70c
           name: 'Port check: DNS TCP (53) from Zabbix server'
           type: SIMPLE
@@ -170,6 +170,8 @@ zabbix_export:
           delay: 1m
           history: 7d
           description: 'Проверка TCP-порта DNS (53) — используется для зонных передач и запросов больше 512 байт.'
+          valuemap:
+            name: 'Service availability'
           tags:
             - tag: component
               value: dns
@@ -179,76 +181,35 @@ zabbix_export:
               name: 'КД: DNS (53/tcp) не отвечает 3 минуты'
               priority: HIGH
               description: 'DNS по TCP недоступен 3 минуты. Обычные запросы идут по UDP, но большие ответы и зонные передачи — по TCP.'
-        - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f70d
-          name: 'Zabbix agent ping (active)'
-          type: ZABBIX_ACTIVE
-          key: 'agent.ping'
-          delay: 1m
-          history: 7d
-          description: 'Heartbeat активного агента на КД. Сам по себе значение не важно — важно наличие данных (см. триггер nodata).'
-          tags:
-            - tag: component
-              value: health
-          triggers:
-            - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f73a
-              expression: 'nodata(/Template Windows Domain Controller/agent.ping,5m)=1'
-              name: 'КД: активный агент молчит 5 минут (хост недоступен или агент упал)'
-              priority: HIGH
-              description: 'Нет данных от активного агента 5 минут: КД недоступен по сети, упал агент или идет ребут. Порты (simple checks) могут при этом отвечать — сравни их состояние.'
         - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f70e
           name: 'System time check (drift vs Zabbix server)'
           type: ZABBIX_PASSIVE
-          key: 'system.localtime'
+          key: 'system.localtime[utc]'
           delay: 1m
           history: 7d
-          description: 'Локальное время КД (unixtime). Сравнивается с временем Zabbix-сервера через fuzzytime — дрейф более 60 секунд = проблема.'
+          description: 'Локальное время КД в UTC (unixtime). Ключ с параметром [utc], чтобы не конфликтовать с system.localtime из шаблона Windows. Сравнивается с временем Zabbix-сервера через fuzzytime — дрейф более 60 секунд = проблема.'
           tags:
             - tag: component
               value: time
           triggers:
             - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f73b
-              expression: 'fuzzytime(/Template Windows Domain Controller/system.localtime,60)=0'
+              expression: 'fuzzytime(/Template Windows Domain Controller/system.localtime[utc],60)=0'
               name: 'КД: расхождение времени с сервером Zabbix более 60 сек'
               priority: WARNING
               description: 'Время на КД ушло относительно Zabbix-сервера более чем на 60 секунд. При расхождении более 5 минут Kerberos-аутентификация откажет. Проверь: w32tm /query /status, источник времени, службу W32Time.'
-        - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f70f
-          name: 'FS C: used space in %'
-          type: ZABBIX_PASSIVE
-          key: 'vfs.fs.size[C:,pused]'
-          delay: 1m
-          history: 7d
-          trends: 90d
-          units: '%'
-          description: 'Занятое место на диске C: в процентах. Здесь же лежит NTDS.dit (база AD) и журналы — при переполнении КД останавливается.'
-          tags:
-            - tag: component
-              value: storage
-          triggers:
-            - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f73c
-              expression: 'min(/Template Windows Domain Controller/vfs.fs.size[C:,pused],10m)>85'
-              name: 'КД: на диске C: занято более 85%'
-              priority: WARNING
-              description: 'На C: занято более 85%. Проверь рост NTDS.dit (%SystemRoot%\NTDS), журналы, wsus/обновления. Реагируй до критического порога — переполнение остановит КД.'
-            - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f73d
-              expression: 'min(/Template Windows Domain Controller/vfs.fs.size[C:,pused],10m)>95'
-              name: 'КД: на диске C: занято более 95% — критично'
-              priority: HIGH
-              description: 'На C: занято более 95% — КД может остановиться в любой момент (нет места под журнал AD, temp, своп). Срочно освобождай место.'
         - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f710
-          name: 'System uptime'
+          name: 'System boot time (uptime control)'
           type: ZABBIX_PASSIVE
-          key: 'system.uptime'
+          key: 'system.boottime'
           delay: 1m
           history: 7d
-          trends: 90d
-          units: uptime
-          description: 'Время непрерывной работы КД. КД не перезагружается принудительно: значение больше 45 дней — напоминание о плановом обслуживании.'
+          description: 'Время загрузки КД (unixtime). system.uptime занят шаблоном Windows, поэтому контроль аптайма через boottime: триггер сравнивает now()-boottime с 45 днями. КД не перезагружается принудительно — это напоминание о плановом обслуживании.'
           tags:
             - tag: component
               value: os
           triggers:
             - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f73e
-              expression: 'last(/Template Windows Domain Controller/system.uptime)>3888000'
+              expression: 'last(/Template Windows Domain Controller/system.boottime)<now()-3888000'
               name: 'КД: аптайм более 45 дней — напоминание о плановом обслуживании'
               priority: INFO
               description: 'КД работает без перезагрузки более 45 дней. Это только напоминание: ребут выполнять вручную в нерабочее время, с Maintenance в Zabbix и с учетом, что филиалы на это время останутся без AD/DNS.'
@@ -349,21 +310,23 @@ zabbix_export:
               priority: INFO
               description: 'Учетка отключена или включена. INFO без оповещений — остается в проблемах/истории, удобно при разборе «у меня не логинится».'
         - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f717
-          name: 'Port check: Kerberos (88/udp) from Zabbix server'
-          type: SIMPLE
-          key: 'net.udp.service[udp,,88]'
+          name: 'Kerberos KDC listens on TCP 88 (local socket check)'
+          type: ZABBIX_PASSIVE
+          key: 'net.tcp.listen[88]'
           delay: 1m
           history: 7d
-          description: 'Проверка UDP-порта Kerberos (88) с сервера Zabbix. Основной транспорт выдачи тикетов KDC; филиальные станции ходят через него через фаервол. TCP 88 не проверяем — это fallback.'
+          description: 'Проверяет, что на КД сокет TCP 88 в состоянии LISTEN (слушает KDC). net.udp.listen на Windows не поддерживается агентом, а внешней simple-проверки Kerberos нет — UDP-сокеты без протокольного запроса не проверить. KDC при работе слушает 88/tcp и 88/udp одновременно, TCP-сокета достаточно. 1 = слушает.'
+          valuemap:
+            name: 'Service availability'
           tags:
             - tag: component
               value: ad
           triggers:
             - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f745
-              expression: 'max(/Template Windows Domain Controller/net.udp.service[udp,,88],3m)=0'
-              name: 'КД: Kerberos (88/udp) не отвечает 3 минуты — филиалы не получают тикеты'
+              expression: 'last(/Template Windows Domain Controller/net.tcp.listen[88])=0'
+              name: 'КД: KDC не слушает TCP 88 — Kerberos-тикеты не выдаются'
               priority: HIGH
-              description: 'Kerberos по UDP недоступен 3 минуты: станции не могут получить тикеты — логоны и доступ к сетевым ресурсам начнут отваливаться с ошибками аутентификации. Служба kdc при этом может быть жива — это именно сетевая проверка снаружи (фаервол/маршрут).'
+              description: 'Сокет UDP 88 не в состоянии LISTEN: KDC не принимает Kerberos-запросы — логоны и доступ к ресурсам начнут отваливаться. Проверь службу kdc (триггер выше) и журнал System.'
         - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f718
           name: 'Windows Event Log: DNS Server errors (all, severity=Error)'
           type: ZABBIX_PASSIVE
@@ -380,3 +343,30 @@ zabbix_export:
               name: 'КД: 2+ ошибки в журнале DNS Server за 30 минут: {ITEM.VALUE}'
               priority: AVERAGE
               description: 'Служба DNS пишет ошибки (зоны, загрузка, динамические обновления). Текст события в значении айтема. 2+ за 30 мин против единичных шумных срабатываний.'
+      valuemaps:
+        - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f719
+          name: 'Windows service state'
+          mappings:
+            - value: '0'
+              newvalue: Running
+            - value: '1'
+              newvalue: Pause pending
+            - value: '2'
+              newvalue: Paused
+            - value: '3'
+              newvalue: Continue pending
+            - value: '4'
+              newvalue: Stop pending
+            - value: '5'
+              newvalue: Stopped
+            - value: '6'
+              newvalue: Unknown
+            - value: '7'
+              newvalue: No such service
+        - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f71a
+          name: 'Service availability'
+          mappings:
+            - value: '0'
+              newvalue: Down
+            - value: '1'
+              newvalue: Up

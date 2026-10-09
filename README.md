@@ -9,7 +9,7 @@
 2. Хост DC → шаблоны → привязать «Template Windows Domain Controller».
 3. Подождать ~5 минут, проверить Latest data (все порты должны быть = 1, службы = 0).
 
-## Что мониторит (22 айтема)
+## Что мониторит (19 айтемов)
 
 ### Службы AD-стека (agent, passive, 1 мин)
 
@@ -30,9 +30,10 @@
 | LDAP 389 | `net.tcp.service[tcp,,389]` | 0 три мин → HIGH |
 | LDAPS 636 | `net.tcp.service[tcp,,636]` | 0 пять мин → WARNING |
 | SMB 445 (SYSVOL/GPO) | `net.tcp.service[tcp,,445]` | 0 три мин → HIGH |
-| DNS 53 UDP | `net.udp.service[udp,,53]` | 0 три мин → DISASTER |
 | DNS 53 TCP | `net.tcp.service[tcp,,53]` | 0 три мин → HIGH |
-| Kerberos 88 UDP | `net.udp.service[udp,,88]` | 0 три мин → HIGH (филиалы не получают тикеты) |
+| Kerberos 88 TCP | `net.tcp.listen[88]` (LISTEN-сокет на КД) | 0 → HIGH (KDC не слушает) |
+
+DNS по UDP снаружи не проверяется — simple checks умеют только NTP. Этот случай перекрывают: TCP 53, состояние службы DNS и журнал DNS Server. `net.udp.listen` на Windows не существует, поэтому Kerberos контролируется через TCP-сокет (KDC слушает 88/tcp и 88/udp одновременно).
 
 Показывают доступность КД так, как её видят филиалы через фаервол. Если агент упал, а порты отвечают — проблема в агенте, а не в КД.
 
@@ -54,16 +55,18 @@
 
 | Айтем | Триггер |
 |---|---|
-| `agent.ping` (active) | nodata 5 мин → HIGH (агент/хост недоступен) |
-| `system.localtime` | `fuzzytime` > 60 сек → WARNING (дрейф времени, Kerberos ломается после 5 мин) |
-| `vfs.fs.size[C:,pused]` | > 85% → WARNING, > 95% → HIGH (там же NTDS.dit) |
-| `system.uptime` | > 45 дней → INFO (напоминание, не автоматика) |
+| `system.localtime[utc]` | `fuzzytime` > 60 сек → WARNING (дрейф времени, Kerberos ломается после 5 мин) |
+| `system.boottime` | > 45 дней → INFO (`now()-boottime`; `system.uptime` занят шаблоном Windows) |
+
+Диск C: в шаблоне отсутствует — он уже покрыт discovery из «Windows by Zabbix agent active». Порог задай макросом на хосте DC: `{$VFS.FS.PUSED.MAX.WARN}` = `85` (по умолчанию 90). Свой ключ `vfs.fs.size[C:,pused]` добавить нельзя: в 7.4 прототип `{#FSNAME}` резолвится в `C:` при привязке и конфликтует.
 
 ## Важные оговорки
 
 - **КД не входит в принудительную недельную перезагрузку станций.** Ребут — только вручную, в нерабочее время, с Maintenance в Zabbix: на время ребута филиалы полностью остаются без AD/DNS.
 - События 5719/5722 и 5774 заведомо шумные на перегруженном/нестабильном канале — триггеры настроены на повторы (3+ / 2+ за 30 мин), а не на единичные срабатывания.
 - `eventlog[Security]` читает агент от SYSTEM — дополнительных прав не нужно, аудит 4740/4728/4732/4756/4725/4722 на КД включен по умолчанию.
+- eventlog-айтемы нельзя запускать кнопкой «Выполнить сейчас» / тестировать — ошибка «not supported in test or single passive check mode» ожидаема. Они опрашиваются по расписанию и пусты, пока не появится подходящее событие.
+- У айтемов служб и портов висят value maps: «Windows service state» (0→Running, 5→Stopped и т.д.) и «Service availability» (1→Up, 0→Down) — в Latest data вместо голых 0/1 будут слова.
 
 ## Файлы
 
