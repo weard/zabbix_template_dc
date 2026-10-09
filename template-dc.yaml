@@ -1,0 +1,382 @@
+zabbix_export:
+  version: '7.4'
+  template_groups:
+    - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f701
+      name: Templates
+  templates:
+    - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f702
+      template: 'Template Windows Domain Controller'
+      name: 'Template Windows Domain Controller'
+      description: |
+        Контроллер домена, единственный КД + DNS на всю организацию.
+        Шаблон дополняет связанные «Windows by Zabbix agent active» (CPU/RAM уже там) и «AD DS Monitoring and Attack Detection».
+        1) Службы AD-стека: NTDS, DNS, Netlogon, KDC, W32Time — падение любой = филиалы/станции начнут слать «trust broken» и «нет DNS».
+        2) Проверка портов с сервера Zabbix (simple checks, не зависят от агента): LDAP 389, LDAPS 636, SMB 445, DNS 53 UDP+TCP — имитирует доступность КД для филиалов через фаервол.
+        3) Журналы: Directory Service 2042 (USN rollback — признак снапшота/восстановления, КД в опасности), Netlogon 5719/5722, DNS 5774.
+        4) Диск C: (NTDS.dit растет от мусора — при переполнении КД встает), дрейф времени (fuzzytime), аптайм.
+        КД НЕ включается в принудительную недельную перезагрузку станций: аптайм > 45 дней — только INFO-напоминание.
+        Перед любым ребутом КД — Maintenance в Zabbix и учитывать, что филиалы на это время полностью без AD/DNS.
+      groups:
+        - name: Templates
+      items:
+        - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f703
+          name: 'Service state: NTDS (Directory Service)'
+          type: ZABBIX_PASSIVE
+          key: 'service.info[NTDS,state]'
+          delay: 1m
+          history: 7d
+          description: 'Состояние службы NTDS — ядро Active Directory. 0 = работает, любое другое значение = проблема. При падении NTDS КД не обслуживает AD, станции начнут терять trust.'
+          tags:
+            - tag: component
+              value: ad
+          triggers:
+            - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f730
+              expression: 'last(/Template Windows Domain Controller/service.info[NTDS,state])<>0'
+              name: 'КД: служба NTDS (Directory Service) не работает'
+              priority: DISASTER
+              description: 'Служба NTDS остановлена или в ошибке. Это ядро AD — станции и филиалы теряют доверие к домену. Срочно: services.msc / Get-Service NTDS, журнал Directory Service.'
+        - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f704
+          name: 'Service state: DNS Server'
+          type: ZABBIX_PASSIVE
+          key: 'service.info[DNS,state]'
+          delay: 1m
+          history: 7d
+          description: 'Состояние службы DNS Server. 0 = работает. КД — единственный DNS для всей организации, включая филиалы.'
+          tags:
+            - tag: component
+              value: dns
+          triggers:
+            - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f731
+              expression: 'last(/Template Windows Domain Controller/service.info[DNS,state])<>0'
+              name: 'КД: служба DNS Server не работает'
+              priority: DISASTER
+              description: 'DNS Server на КД остановлен. Вся организация (включая филиалы) без разрешения имен — отвалятся AD, сайты, терминалы.'
+        - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f705
+          name: 'Service state: Netlogon'
+          type: ZABBIX_PASSIVE
+          key: 'service.info[Netlogon,state]'
+          delay: 1m
+          history: 7d
+          description: 'Состояние службы Netlogon. 0 = работает. Netlogon обслуживает secure channel и регистрацию SRV-записей в DNS.'
+          tags:
+            - tag: component
+              value: ad
+          triggers:
+            - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f732
+              expression: 'last(/Template Windows Domain Controller/service.info[Netlogon,state])<>0'
+              name: 'КД: служба Netlogon не работает'
+              priority: HIGH
+              description: 'Netlogon остановлен: secure channel не обслуживается, SRV-записи (_ldap._tcp.dc._msdcs) не обновляются — станции перестанут находить КД.'
+        - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f706
+          name: 'Service state: KDC (Kerberos)'
+          type: ZABBIX_PASSIVE
+          key: 'service.info[kdc,state]'
+          delay: 1m
+          history: 7d
+          description: 'Состояние службы KDC (Kerberos Key Distribution Center). 0 = работает. Без KDC не выдаются тикеты — логон невозможен.'
+          tags:
+            - tag: component
+              value: ad
+          triggers:
+            - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f733
+              expression: 'last(/Template Windows Domain Controller/service.info[kdc,state])<>0'
+              name: 'КД: служба KDC (Kerberos) не работает'
+              priority: DISASTER
+              description: 'KDC остановлен: Kerberos-тикеты не выдаются, логон в домен невозможен для всей организации.'
+        - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f707
+          name: 'Service state: Windows Time (W32Time)'
+          type: ZABBIX_PASSIVE
+          key: 'service.info[W32Time,state]'
+          delay: 1m
+          history: 7d
+          description: 'Состояние службы времени W32Time. 0 = работает. Дрейф времени на КД ломает Kerberos (погрешность ±5 мин) и логи.'
+          tags:
+            - tag: component
+              value: time
+          triggers:
+            - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f734
+              expression: 'last(/Template Windows Domain Controller/service.info[W32Time,state])<>0'
+              name: 'КД: служба Windows Time не работает'
+              priority: WARNING
+              description: 'W32Time остановлен: время КД начнет уходить, при расхождении более 5 минут Kerberos-аутентификация откажет.'
+        - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f708
+          name: 'Port check: LDAP (389) from Zabbix server'
+          type: SIMPLE
+          key: 'net.tcp.service[tcp,,389]'
+          delay: 1m
+          history: 7d
+          description: 'Проверка TCP-порта LDAP (389) с сервера Zabbix. Не зависит от агента — показывает доступность КД так, как её видит сеть/фаервол.'
+          tags:
+            - tag: component
+              value: network
+          triggers:
+            - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f735
+              expression: 'max(/Template Windows Domain Controller/net.tcp.service[tcp,,389],3m)=0'
+              name: 'КД: LDAP (389) не отвечает 3 минуты'
+              priority: HIGH
+              description: 'Порт LDAP 389 не отвечает с сервера Zabbix 3 минуты. Порог 3 мин против коротких провалов: ребут КД, перегрузка сети. Проверь службу NTDS, фаервол и маршрут до КД.'
+        - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f709
+          name: 'Port check: LDAPS (636) from Zabbix server'
+          type: SIMPLE
+          key: 'net.tcp.service[tcp,,636]'
+          delay: 1m
+          history: 7d
+          description: 'Проверка TCP-порта LDAPS (636) с сервера Zabbix. Используется защищенными привязками и некоторыми приложениями.'
+          tags:
+            - tag: component
+              value: network
+          triggers:
+            - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f736
+              expression: 'max(/Template Windows Domain Controller/net.tcp.service[tcp,,636],5m)=0'
+              name: 'КД: LDAPS (636) не отвечает 5 минут'
+              priority: WARNING
+              description: 'LDAPS 636 недоступен 5 минут. Не критично для станций (они ходят по 389), но если используется LDAPS-привязка в приложениях — они отвалятся.'
+        - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f70a
+          name: 'Port check: SMB (445) from Zabbix server'
+          type: SIMPLE
+          key: 'net.tcp.service[tcp,,445]'
+          delay: 1m
+          history: 7d
+          description: 'Проверка TCP-порта SMB (445) — файловые шары КД, в т.ч. SYSVOL и NETLOGON (групповые политики).'
+          tags:
+            - tag: component
+              value: network
+          triggers:
+            - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f737
+              expression: 'max(/Template Windows Domain Controller/net.tcp.service[tcp,,445],3m)=0'
+              name: 'КД: SMB (445) не отвечает 3 минуты — SYSVOL/GPO недоступны'
+              priority: HIGH
+              description: 'SMB 445 недоступен 3 минуты: станции не получат SYSVOL и NETLOGON — групповые политики перестанут применяться, логон-скрипты не выполнятся.'
+        - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f70b
+          name: 'Port check: DNS UDP (53) from Zabbix server'
+          type: SIMPLE
+          key: 'net.udp.service[udp,,53]'
+          delay: 1m
+          history: 7d
+          description: 'Проверка UDP-порта DNS (53) с сервера Zabbix. Основной транспорт DNS-запросов для всех клиентов, включая филиалы.'
+          tags:
+            - tag: component
+              value: dns
+          triggers:
+            - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f738
+              expression: 'max(/Template Windows Domain Controller/net.udp.service[udp,,53],3m)=0'
+              name: 'КД: DNS (53/udp) не отвечает 3 минуты'
+              priority: DISASTER
+              description: 'DNS по UDP недоступен 3 минуты: вся организация без разрешения имен. Филиалы с внешними DNS (77.88.8.8) не пострадают, локальные — полностью.'
+        - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f70c
+          name: 'Port check: DNS TCP (53) from Zabbix server'
+          type: SIMPLE
+          key: 'net.tcp.service[tcp,,53]'
+          delay: 1m
+          history: 7d
+          description: 'Проверка TCP-порта DNS (53) — используется для зонных передач и запросов больше 512 байт.'
+          tags:
+            - tag: component
+              value: dns
+          triggers:
+            - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f739
+              expression: 'max(/Template Windows Domain Controller/net.tcp.service[tcp,,53],3m)=0'
+              name: 'КД: DNS (53/tcp) не отвечает 3 минуты'
+              priority: HIGH
+              description: 'DNS по TCP недоступен 3 минуты. Обычные запросы идут по UDP, но большие ответы и зонные передачи — по TCP.'
+        - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f70d
+          name: 'Zabbix agent ping (active)'
+          type: ZABBIX_ACTIVE
+          key: 'agent.ping'
+          delay: 1m
+          history: 7d
+          description: 'Heartbeat активного агента на КД. Сам по себе значение не важно — важно наличие данных (см. триггер nodata).'
+          tags:
+            - tag: component
+              value: health
+          triggers:
+            - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f73a
+              expression: 'nodata(/Template Windows Domain Controller/agent.ping,5m)=1'
+              name: 'КД: активный агент молчит 5 минут (хост недоступен или агент упал)'
+              priority: HIGH
+              description: 'Нет данных от активного агента 5 минут: КД недоступен по сети, упал агент или идет ребут. Порты (simple checks) могут при этом отвечать — сравни их состояние.'
+        - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f70e
+          name: 'System time check (drift vs Zabbix server)'
+          type: ZABBIX_PASSIVE
+          key: 'system.localtime'
+          delay: 1m
+          history: 7d
+          description: 'Локальное время КД (unixtime). Сравнивается с временем Zabbix-сервера через fuzzytime — дрейф более 60 секунд = проблема.'
+          tags:
+            - tag: component
+              value: time
+          triggers:
+            - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f73b
+              expression: 'fuzzytime(/Template Windows Domain Controller/system.localtime,60)=0'
+              name: 'КД: расхождение времени с сервером Zabbix более 60 сек'
+              priority: WARNING
+              description: 'Время на КД ушло относительно Zabbix-сервера более чем на 60 секунд. При расхождении более 5 минут Kerberos-аутентификация откажет. Проверь: w32tm /query /status, источник времени, службу W32Time.'
+        - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f70f
+          name: 'FS C: used space in %'
+          type: ZABBIX_PASSIVE
+          key: 'vfs.fs.size[C:,pused]'
+          delay: 1m
+          history: 7d
+          trends: 90d
+          units: '%'
+          description: 'Занятое место на диске C: в процентах. Здесь же лежит NTDS.dit (база AD) и журналы — при переполнении КД останавливается.'
+          tags:
+            - tag: component
+              value: storage
+          triggers:
+            - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f73c
+              expression: 'min(/Template Windows Domain Controller/vfs.fs.size[C:,pused],10m)>85'
+              name: 'КД: на диске C: занято более 85%'
+              priority: WARNING
+              description: 'На C: занято более 85%. Проверь рост NTDS.dit (%SystemRoot%\NTDS), журналы, wsus/обновления. Реагируй до критического порога — переполнение остановит КД.'
+            - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f73d
+              expression: 'min(/Template Windows Domain Controller/vfs.fs.size[C:,pused],10m)>95'
+              name: 'КД: на диске C: занято более 95% — критично'
+              priority: HIGH
+              description: 'На C: занято более 95% — КД может остановиться в любой момент (нет места под журнал AD, temp, своп). Срочно освобождай место.'
+        - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f710
+          name: 'System uptime'
+          type: ZABBIX_PASSIVE
+          key: 'system.uptime'
+          delay: 1m
+          history: 7d
+          trends: 90d
+          units: uptime
+          description: 'Время непрерывной работы КД. КД не перезагружается принудительно: значение больше 45 дней — напоминание о плановом обслуживании.'
+          tags:
+            - tag: component
+              value: os
+          triggers:
+            - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f73e
+              expression: 'last(/Template Windows Domain Controller/system.uptime)>3888000'
+              name: 'КД: аптайм более 45 дней — напоминание о плановом обслуживании'
+              priority: INFO
+              description: 'КД работает без перезагрузки более 45 дней. Это только напоминание: ребут выполнять вручную в нерабочее время, с Maintenance в Zabbix и с учетом, что филиалы на это время останутся без AD/DNS.'
+        - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f711
+          name: 'Windows Event Log: Directory Service critical (2042 USN rollback)'
+          type: ZABBIX_PASSIVE
+          key: 'eventlog[Directory Service,,,,2042,skip]'
+          delay: 1m
+          history: 30d
+          description: 'Событие 2042 в журнале Directory Service — откат USN: КД восстановлен из снапшота/бэкапа без корректной процедуры. Дубликаты пропускаются.'
+          tags:
+            - tag: component
+              value: eventlog
+          triggers:
+            - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f73f
+              expression: 'length(last(/Template Windows Domain Controller/eventlog[Directory Service,,,,2042,skip]))>0'
+              name: 'КД: USN rollback (событие 2042) — КД восстановлен из снапшота!'
+              priority: DISASTER
+              description: 'Directory Service зарегистрировал откат USN: КД был восстановлен из снапшота или некорректного бэкапа. Репликация с этим КД может навредить AD. Немедленно разбираться: корректная процедура восстановления КД — только авторитетное/неавторитетное восстановление, не откат VM-снапшота.'
+        - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f712
+          name: 'Windows Event Log: Netlogon errors (5719/5722)'
+          type: ZABBIX_PASSIVE
+          key: 'eventlog[System,,,,5719 5722,skip]'
+          delay: 1m
+          history: 30d
+          description: 'Ошибки Netlogon в System: 5719 (нет доступного контроллера домена), 5722 (сбой аутентификации компьютера). Дубликаты пропускаются.'
+          tags:
+            - tag: component
+              value: eventlog
+          triggers:
+            - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f740
+              expression: 'count(/Template Windows Domain Controller/eventlog[System,,,,5719 5722,skip],30m)>=3'
+              name: 'КД: 3+ ошибки Netlogon (5719/5722) за 30 минут'
+              priority: AVERAGE
+              description: 'Повторяющиеся ошибки Netlogon на самом КД: проблемы с регистрацией в DNS, дублирующимися именами машин или аутентификацией учеток компьютеров. Единичные события — шум, триггер срабатывает на 3+ за полчаса.'
+        - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f713
+          name: 'Windows Event Log: DNS registration errors (5774)'
+          type: ZABBIX_PASSIVE
+          key: 'eventlog[System,,,,5774,skip]'
+          delay: 1m
+          history: 30d
+          description: 'Событие 5774 — регистрация DNS-записей КД не удалась. Классический спутник проблем «некоторые станции не находят КД». Дубликаты пропускаются.'
+          tags:
+            - tag: component
+              value: dns
+          triggers:
+            - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f741
+              expression: 'count(/Template Windows Domain Controller/eventlog[System,,,,5774,skip],30m)>=2'
+              name: 'КД: ошибки регистрации DNS-записей (5774) — филиалы могут терять КД'
+              priority: AVERAGE
+              description: 'КД не может зарегистрировать свои SRV/узловые записи в DNS (2+ за 30 мин). Симптом для филиалов: «знаменитые» обрывы trust и невидимость КД через внешние DNS. Проверить зону, динамическое обновление и интерфейсы КД.'
+        - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f714
+          name: 'Windows Event Log: account lockouts (4740)'
+          type: ZABBIX_PASSIVE
+          key: 'eventlog[Security,,,,4740,skip]'
+          delay: 1m
+          history: 30d
+          description: 'Событие 4740 — учетная запись заблокирована (превышено число неудачных логонов). На КД ловит блокировки по всем филиалам. Дубликаты пропускаются.'
+          tags:
+            - tag: component
+              value: security
+          triggers:
+            - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f742
+              expression: 'length(last(/Template Windows Domain Controller/eventlog[Security,,,,4740,skip]))>0'
+              name: 'КД: заблокирована учетная запись (4740): {ITEM.VALUE}'
+              priority: WARNING
+              description: 'Кто-то заблокировал учетку (обычно пользователь сам, набравшись пароль). Текст события содержит имя учетки и машину-источник. При всплеске на одну учетку — проверь, нет ли подбора пароля.'
+        - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f715
+          name: 'Windows Event Log: privileged group membership changes (4728/4732/4756)'
+          type: ZABBIX_PASSIVE
+          key: 'eventlog[Security,,,,4728 4732 4756,skip]'
+          delay: 1m
+          history: 30d
+          description: 'События добавления члена в группы безопасности: 4728 (глобальная, напр. Domain Admins), 4732 (локальная домена), 4756 (универсальная). Дубликаты пропускаются. Заодно читай историю айтема — там факт всех изменений состава групп.'
+          tags:
+            - tag: component
+              value: security
+          triggers:
+            - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f743
+              expression: 'length(last(/Template Windows Domain Controller/eventlog[Security,,,,4728 4732 4756,skip]))>0'
+              name: 'КД: изменен состав группы безопасности (4728/4732/4756): {ITEM.VALUE}'
+              priority: HIGH
+              description: 'Кто-то добавил пользователя в доменную группу безопасности. Проверь, что это ожидаемое изменение (текст события содержит кто/кого/в какую группу). Особенно критично для Domain Admins / Enterprise Admins.'
+        - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f716
+          name: 'Windows Event Log: account disabled/enabled (4725/4722)'
+          type: ZABBIX_PASSIVE
+          key: 'eventlog[Security,,,,4725 4722,skip]'
+          delay: 1m
+          history: 30d
+          description: '4725 — учетная запись отключена, 4722 — включена. Полезно ловить «исчезающие» учетки и несанкционированное включение. Дубликаты пропускаются.'
+          tags:
+            - tag: component
+              value: security
+          triggers:
+            - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f744
+              expression: 'length(last(/Template Windows Domain Controller/eventlog[Security,,,,4725 4722,skip]))>0'
+              name: 'КД: учетная запись отключена/включена (4725/4722): {ITEM.VALUE}'
+              priority: INFO
+              description: 'Учетка отключена или включена. INFO без оповещений — остается в проблемах/истории, удобно при разборе «у меня не логинится».'
+        - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f717
+          name: 'Port check: Kerberos (88/udp) from Zabbix server'
+          type: SIMPLE
+          key: 'net.udp.service[udp,,88]'
+          delay: 1m
+          history: 7d
+          description: 'Проверка UDP-порта Kerberos (88) с сервера Zabbix. Основной транспорт выдачи тикетов KDC; филиальные станции ходят через него через фаервол. TCP 88 не проверяем — это fallback.'
+          tags:
+            - tag: component
+              value: ad
+          triggers:
+            - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f745
+              expression: 'max(/Template Windows Domain Controller/net.udp.service[udp,,88],3m)=0'
+              name: 'КД: Kerberos (88/udp) не отвечает 3 минуты — филиалы не получают тикеты'
+              priority: HIGH
+              description: 'Kerberos по UDP недоступен 3 минуты: станции не могут получить тикеты — логоны и доступ к сетевым ресурсам начнут отваливаться с ошибками аутентификации. Служба kdc при этом может быть жива — это именно сетевая проверка снаружи (фаервол/маршрут).'
+        - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f718
+          name: 'Windows Event Log: DNS Server errors (all, severity=Error)'
+          type: ZABBIX_PASSIVE
+          key: 'eventlog[DNS Server,,Error,,,skip]'
+          delay: 1m
+          history: 30d
+          description: 'Ошибки из журнала DNS Server (только severity=Error): проблемы зон, загрузки, динамических обновлений. Эти события НЕ попадают в журнал System, без этого айтема они мимо мониторинга. Дубликаты пропускаются.'
+          tags:
+            - tag: component
+              value: dns
+          triggers:
+            - uuid: b2c3d4e5f6a7488091a2b3c4d5e6f746
+              expression: 'count(/Template Windows Domain Controller/eventlog[DNS Server,,Error,,,skip],30m)>=2'
+              name: 'КД: 2+ ошибки в журнале DNS Server за 30 минут: {ITEM.VALUE}'
+              priority: AVERAGE
+              description: 'Служба DNS пишет ошибки (зоны, загрузка, динамические обновления). Текст события в значении айтема. 2+ за 30 мин против единичных шумных срабатываний.'
